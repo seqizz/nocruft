@@ -147,7 +147,7 @@ mid-execution (`mkdir -p A/B/C` is the canonical case) resolve correctly.
 In your system flake's `inputs`:
 
 ```nix
-inputs.nocruft.url = "path:/devel/nocruft"; # or github:user/nocruft
+inputs.nocruft.url = "git+https://git.gurkan.in/gurkan/nocruft";
 ```
 
 In your `nixosConfiguration` modules:
