@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/nocruft"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-only"
+repository = "https://github.com/gurkan/nocruft"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
