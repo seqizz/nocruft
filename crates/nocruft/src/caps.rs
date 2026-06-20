@@ -6,6 +6,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
+const CAP_DAC_READ_SEARCH: u32 = 2;
 const CAP_SYS_ADMIN: u32 = 21;
 const CAP_PERFMON: u32 = 38;
 const CAP_BPF: u32 = 39;
@@ -21,23 +22,34 @@ pub fn check_bpf_privileges() -> Result<()> {
 
     let has = |bit: u32| (cap_eff >> bit) & 1 == 1;
 
-    if has(CAP_SYS_ADMIN) || (has(CAP_BPF) && has(CAP_PERFMON)) {
+    // CAP_SYS_ADMIN trumps everything else.
+    if has(CAP_SYS_ADMIN) {
+        return Ok(());
+    }
+    // The common non-root combo. CAP_DAC_READ_SEARCH is needed to read
+    // /sys/kernel/tracing/events/.../id when attaching tracepoints on
+    // distros that keep those files mode 0400 root:root (NixOS, current
+    // Debian).
+    if has(CAP_BPF) && has(CAP_PERFMON) && has(CAP_DAC_READ_SEARCH) {
         return Ok(());
     }
 
     bail!(
-        "insufficient privileges to load BPF programs.\n\
+        "insufficient privileges to load and attach BPF programs.\n\
          \n\
-         nocruft needs CAP_BPF + CAP_PERFMON (or CAP_SYS_ADMIN as a fallback).\n\
-         Detected effective caps: CAP_BPF={} CAP_PERFMON={} CAP_SYS_ADMIN={}.\n\
+         nocruft needs CAP_BPF + CAP_PERFMON + CAP_DAC_READ_SEARCH\n\
+         (or CAP_SYS_ADMIN as a single-cap fallback).\n\
+         Detected: CAP_BPF={} CAP_PERFMON={} CAP_DAC_READ_SEARCH={} CAP_SYS_ADMIN={}.\n\
          \n\
          Fix one of:\n  \
            - NixOS:  add the flake module and `programs.nocruft.enable = true;`\n  \
                      then run `nocruft` (already at /run/wrappers/bin/nocruft).\n  \
-           - setcap: sudo setcap cap_bpf,cap_perfmon+ep $(realpath $(command -v nocruft))\n  \
+           - setcap: sudo setcap cap_bpf,cap_perfmon,cap_dac_read_search+ep \\\n  \
+                     $(realpath $(command -v nocruft))\n  \
            - sudo:   sudo -E nocruft ...",
         bool_int(has(CAP_BPF)),
         bool_int(has(CAP_PERFMON)),
+        bool_int(has(CAP_DAC_READ_SEARCH)),
         bool_int(has(CAP_SYS_ADMIN)),
     );
 }

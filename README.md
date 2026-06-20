@@ -35,7 +35,7 @@ NixOS and recent Debian.
 ```sh
 nix develop                                       # gets clang, libbpf, rustc
 cargo build --release
-sudo setcap cap_bpf,cap_perfmon+ep ./target/release/nocruft
+sudo setcap cap_bpf,cap_perfmon,cap_dac_read_search+ep ./target/release/nocruft
 
 ./target/release/nocruft -p hello
 ```
@@ -160,17 +160,19 @@ In your `nixosConfiguration` modules:
 ```
 
 After `nixos-rebuild switch`, the binary is at `/run/wrappers/bin/nocruft`
-with `cap_bpf,cap_perfmon+ep` already applied via NixOS' `security.wrappers`
+with `cap_bpf,cap_perfmon,cap_dac_read_search+ep` already applied via NixOS' `security.wrappers`
 mechanism (the only NixOS-clean way to ship a capability-bearing binary,
 since the Nix store itself can't carry caps). Just run `nocruft -p hello`.
 
 ## Permissions
 
-eBPF tracepoint programs need `CAP_BPF` + `CAP_PERFMON` on kernels ≥ 5.8.
-The order of preference:
+eBPF tracepoint programs need `CAP_BPF` + `CAP_PERFMON` (kernels ≥ 5.8) AND
+`CAP_DAC_READ_SEARCH` on distros that keep `/sys/kernel/tracing/events/.../id`
+mode 0400 root:root (NixOS, current Debian). The order of preference:
 
-1. `setcap cap_bpf,cap_perfmon+ep $(realpath nocruft)` — best UX, run as
-   yourself, `$HOME` and `$NIX_PATH` are yours.
+1. `setcap cap_bpf,cap_perfmon,cap_dac_read_search+ep $(realpath nocruft)`
+   — best UX, run as yourself, `$HOME` and `$NIX_PATH` are yours. The
+   NixOS module does this for you under `/run/wrappers/bin/nocruft`.
 2. `sudo -E nocruft …` — works everywhere but emits the `$HOME is not owned
    by you` warning and runs `nix-shell` as root.
 3. `sudo nocruft …` — last resort; loses your environment, often confuses

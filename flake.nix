@@ -41,10 +41,17 @@
             # /run/wrappers/bin is on PATH for users by default on NixOS.
             # The wrapper carries the file capabilities, leaving the
             # underlying binary in the Nix store unprivileged.
+            #
+            # CAP_BPF + CAP_PERFMON authorize the BPF syscalls themselves,
+            # but binding a tracepoint to a perf event also requires
+            # reading /sys/kernel/tracing/events/<group>/<name>/id, which
+            # on NixOS is mode 0400 root:root. CAP_DAC_READ_SEARCH lets
+            # the wrapper open those id files without otherwise running
+            # as root.
             security.wrappers.nocruft = {
               owner = "root";
               group = "root";
-              capabilities = "cap_bpf,cap_perfmon+ep";
+              capabilities = "cap_bpf,cap_perfmon,cap_dac_read_search+ep";
               source = "${cfg.package}/bin/nocruft";
             };
           };
