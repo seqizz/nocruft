@@ -72,7 +72,8 @@ nocruft -p python3 --run 'python -c ...'  # nix-shell -p python3 --run ...
 | `--nc-include-build`      | off     | Keep build artifacts (`.git`, `node_modules`, `__pycache__`, cargo `target/{debug,release}`, `*.pyc`, …). |
 | `--nc-exclude GLOB`       | —       | Drop paths matching this glob. Repeatable. Use `**` to span slashes. |
 | `--nc-include GLOB`       | —       | Force-keep paths matching this glob, overriding all defaults and excludes. Repeatable. |
-| `--nc-delete-interactive` | off     | After the summary, show a multi-select prompt; selected paths are deleted (deepest-first). |
+| `--nc-delete-interactive` | off     | After the summary, show a multi-select prompt; selected paths are deleted (deepest-first). Space toggles, →/← select/deselect all, Enter confirms, Esc/Ctrl-C aborts. |
+| `--nc-delete-dangerous`   | off     | Delete every reported path with no prompt and no confirmation. Use `--nc-dry-run-delete` first to preview. |
 | `--nc-dry-run-delete`     | off     | Prefix output with `would delete: ` (no actual deletion). |
 | `--nc-verbose`            | off     | Debug-level logging to stderr. |
 | `--nc-exec PROG`          | —       | Run `PROG` instead of `nix-shell`. Debug aid. |

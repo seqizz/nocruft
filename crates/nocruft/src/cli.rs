@@ -42,9 +42,17 @@ pub struct NocruftFlags {
     #[arg(long = "nc-dry-run-delete")]
     pub dry_run_delete: bool,
 
-    /// (Stub) Interactively select created paths for deletion.
+    /// Interactively select created paths for deletion. The prompt
+    /// supports Space (toggle), Right (select all), Left (deselect all),
+    /// Enter (confirm), Esc/Ctrl-C (abort).
     #[arg(long = "nc-delete-interactive")]
     pub delete_interactive: bool,
+
+    /// DELETE EVERY REPORTED PATH WITHOUT ASKING after the program exits.
+    /// No multi-select, no confirmation. Use with care. Combine with
+    /// `--nc-dry-run-delete` first to preview.
+    #[arg(long = "nc-delete-dangerous")]
+    pub delete_dangerous: bool,
 
     /// Do not filter out system pseudo-fs paths (/dev, /proc, /sys, /run, ...).
     #[arg(long = "nc-include-system")]

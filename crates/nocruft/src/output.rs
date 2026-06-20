@@ -176,27 +176,37 @@ pub fn emit(
 ) {
     if flags.json {
         emit_json(events, flags, start_unix_ns, patterns);
-        if flags.delete_interactive {
-            eprintln!("nocruft: --nc-delete-interactive ignored with --nc-json");
-        }
+        warn_delete_incompatible(flags, "--nc-json");
         return;
     }
 
     if flags.no_dedupe {
         emit_plain_no_dedupe(events, flags, start_unix_ns, patterns);
-        if flags.delete_interactive {
-            eprintln!("nocruft: --nc-delete-interactive requires deduped output (default)");
-        }
+        warn_delete_incompatible(flags, "--nc-no-dedupe");
         return;
     }
 
     let summary = build_summary(events, flags, start_unix_ns, patterns);
     emit_plain(&summary, flags);
 
-    if flags.delete_interactive {
+    // Dangerous wins if both are set (it's the more explicit choice).
+    if flags.delete_dangerous {
+        if let Err(e) = dangerous_delete(&summary) {
+            eprintln!("nocruft: delete failed: {}", e);
+        }
+    } else if flags.delete_interactive {
         if let Err(e) = interactive_delete(&summary) {
             eprintln!("nocruft: interactive delete failed: {}", e);
         }
+    }
+}
+
+fn warn_delete_incompatible(flags: &NocruftFlags, mode: &str) {
+    if flags.delete_interactive {
+        eprintln!("nocruft: --nc-delete-interactive ignored with {}", mode);
+    }
+    if flags.delete_dangerous {
+        eprintln!("nocruft: --nc-delete-dangerous ignored with {}", mode);
     }
 }
 
@@ -288,10 +298,9 @@ fn emit_json(
     }
 }
 
-// Interactive cleanup. Presents a multi-select prompt; on confirmation,
-// deletes selected paths in deepest-first order so files are removed before
-// their parent directories, allowing remove_dir to succeed on dirs whose
-// only contents nocruft itself reported.
+// Interactive cleanup. inquire's MultiSelect natively supports
+// Right-arrow = select all, Left-arrow = deselect all, Space = toggle,
+// and renders the keymap below the prompt.
 fn interactive_delete(paths: &[PathBuf]) -> anyhow::Result<()> {
     use std::io::IsTerminal;
 
@@ -308,35 +317,66 @@ fn interactive_delete(paths: &[PathBuf]) -> anyhow::Result<()> {
     let items: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
 
     println!();
-    let selection = dialoguer::MultiSelect::new()
-        .with_prompt(
-            "Select paths to DELETE (Space to toggle, Enter to confirm, Esc/Ctrl-C to abort)",
+    let selected: Vec<String> = match inquire::MultiSelect::new("Select paths to DELETE:", items)
+        .with_page_size(20)
+        .with_help_message(
+            "space=toggle, →=all, ←=none, type=filter, enter=confirm, esc=abort",
         )
-        .items(&items)
-        .interact_opt()?;
-
-    let Some(indices) = selection else {
-        println!("aborted, nothing deleted");
-        return Ok(());
+        .prompt()
+    {
+        Ok(v) => v,
+        Err(inquire::InquireError::OperationCanceled)
+        | Err(inquire::InquireError::OperationInterrupted) => {
+            println!("aborted, nothing deleted");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
     };
-    if indices.is_empty() {
+
+    if selected.is_empty() {
         println!("no paths selected");
         return Ok(());
     }
 
-    // Re-confirm before destructive action.
-    let confirm = dialoguer::Confirm::new()
-        .with_prompt(format!("Delete {} path(s)?", indices.len()))
-        .default(false)
-        .interact()?;
-    if !confirm {
+    // Single-keypress y/N: no Enter needed. Anything that isn't y/Y aborts.
+    if !confirm_single_key(&format!("Delete {} path(s)?", selected.len())) {
         println!("aborted, nothing deleted");
         return Ok(());
     }
 
-    let mut targets: Vec<&PathBuf> = indices.iter().map(|i| &paths[*i]).collect();
-    // Deepest paths first so children get removed before parents. Use
-    // path-component count as the depth proxy.
+    // selected gives us the chosen display strings; map back to PathBuf.
+    let selected_paths: Vec<PathBuf> = selected.into_iter().map(PathBuf::from).collect();
+    let targets: Vec<&PathBuf> = selected_paths.iter().collect();
+    let (ok, fail) = perform_delete(&targets);
+    println!("done: {} deleted, {} failed", ok, fail);
+    Ok(())
+}
+
+// Non-interactive bulk delete. No prompt, no confirmation, no selection.
+// Used by --nc-delete-dangerous.
+fn dangerous_delete(paths: &[PathBuf]) -> anyhow::Result<()> {
+    if paths.is_empty() {
+        println!();
+        println!("(nothing to delete)");
+        return Ok(());
+    }
+    println!();
+    println!(
+        "--nc-delete-dangerous: deleting {} path(s) without confirmation",
+        paths.len()
+    );
+    let targets: Vec<&PathBuf> = paths.iter().collect();
+    let (ok, fail) = perform_delete(&targets);
+    println!("done: {} deleted, {} failed", ok, fail);
+    Ok(())
+}
+
+// Shared delete worker. Deepest paths first so children get removed before
+// parents; remove_dir then succeeds on dirs whose only contents nocruft
+// itself reported. If a dir has unrelated contents we did not see, its
+// removal fails with ENOTEMPTY rather than nuking unknown data.
+fn perform_delete(targets_in: &[&PathBuf]) -> (usize, usize) {
+    let mut targets: Vec<&PathBuf> = targets_in.to_vec();
     targets.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
 
     let mut ok = 0usize;
@@ -350,9 +390,6 @@ fn interactive_delete(paths: &[PathBuf]) -> anyhow::Result<()> {
             }
         };
         let res = if meta.is_dir() && !meta.file_type().is_symlink() {
-            // remove_dir requires empty. We never tree-delete: if user wants
-            // that, they should also select the contents (which they did, if
-            // nocruft saw the creations).
             std::fs::remove_dir(p)
         } else {
             std::fs::remove_file(p)
@@ -368,6 +405,52 @@ fn interactive_delete(paths: &[PathBuf]) -> anyhow::Result<()> {
             }
         }
     }
-    println!("done: {} deleted, {} failed", ok, fail);
-    Ok(())
+    (ok, fail)
+}
+
+// Single-keypress y/n prompt. Avoids the "type y, then Enter" two-stroke
+// dance of inquire::Confirm. y/Y returns true; anything else (including
+// n/N, Esc, Enter, Ctrl-C) returns false. Raw mode is restored on exit
+// even if the read errors.
+fn confirm_single_key(prompt: &str) -> bool {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::terminal;
+    use std::io::Write;
+
+    print!("{} (y/N) ", prompt);
+    let _ = std::io::stdout().flush();
+
+    if terminal::enable_raw_mode().is_err() {
+        // Couldn't switch to raw mode; fall back to line-buffered read so
+        // we don't lose the prompt entirely.
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        return matches!(line.trim(), "y" | "Y" | "yes");
+    }
+
+    let yes = loop {
+        let Ok(ev) = event::read() else { break false };
+        let Event::Key(k) = ev else { continue };
+        // Only react to key-press events (avoid double-firing on key-release
+        // on terminals that emit both).
+        if k.kind != KeyEventKind::Press && k.kind != KeyEventKind::Repeat {
+            continue;
+        }
+        // Ctrl-C aborts.
+        if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            break false;
+        }
+        match k.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => break true,
+            KeyCode::Char('n')
+            | KeyCode::Char('N')
+            | KeyCode::Esc
+            | KeyCode::Enter => break false,
+            _ => continue,
+        }
+    };
+
+    let _ = terminal::disable_raw_mode();
+    println!("{}", if yes { "y" } else { "n" });
+    yes
 }
